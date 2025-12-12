@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HotStuff Simulator</title>
+    <style>
+        :root {
+            --bg-color: #f1f5f9;
+            --node-normal: #fff;
+            --node-malicious: #f3e8ff;
+            --node-dead: #e2e8f0;
+            --leader-glow: #ffd700;
+            --msg-proposal: #3b82f6;
+            --msg-vote: #10b981;
+            --msg-timeout: #ef4444;
+            --msg-fake: #9333ea;
+            --text-main: #334155;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            padding: 10px;
+            color: var(--text-main);
+            user-select: none;
+            overflow: hidden;
+        }
+
+        h1 { margin: 10px 0; font-size: 1.6em; }
+
+        /* Status Panel */
+        .status-panel {
+            background: white; padding: 15px 25px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px;
+            text-align: center; width: 90%; max-width: 600px; min-height: 100px;
+            border-left: 6px solid #ccc; transition: all 0.3s;
+        }
+        .status-panel.normal { border-left-color: #3b82f6; }
+        .status-panel.timeout { border-left-color: #ef4444; background: #fef2f2; }
+        .status-panel.malicious { border-left-color: #9333ea; background: #faf5ff; }
+
+        .view-badge { 
+            background: #475569; color: white; padding: 3px 12px; 
+            border-radius: 15px; font-weight: bold; font-size: 0.9em; margin-bottom: 5px; display: inline-block;
+        }
+        .phase-title { font-size: 1.4em; font-weight: bold; margin: 5px 0; color: #1e293b; }
+        .description { color: #64748b; font-size: 0.95em; line-height: 1.4; }
+
+        /* Network Area */
+        .network-container {
+            position: relative; width: 500px; height: 300px;
+            border: 2px dashed #cbd5e1; border-radius: 20px;
+            display: flex; justify-content: center; align-items: center;
+            margin-bottom: 20px; background-color: #fff;
+        }
+        
+        /* Node Styles */
+        .node {
+            width: 60px; height: 60px;
+            background: var(--node-normal); border: 3px solid #94a3b8; border-radius: 50%;
+            display: flex; justify-content: center; align-items: center;
+            font-weight: bold; font-size: 1.2em; cursor: pointer;
+            position: absolute; z-index: 2;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        .node:hover { transform: scale(1.05); border-color: #64748b; }
+        
+        /* States */
+        .node.malicious { background: var(--node-malicious); border-color: #9333ea; color: #9333ea; }
+        .node.malicious::after { content: "😈"; position: absolute; top: -25px; font-size: 1.4em; }
+
+        .node.dead { background: var(--node-dead); border-color: #94a3b8; color: #fff; filter: grayscale(1); }
+        .node.dead::after { content: "💀"; position: absolute; top: -25px; font-size: 1.4em; }
+
+        /* Roles */
+        .node.leader {
+            transform: scale(1.15); box-shadow: 0 0 20px rgba(255, 215, 0, 0.5); border-color: var(--leader-glow);
+            z-index: 3;
+        }
+        .node.leader::before { content: "👑"; position: absolute; top: -30px; font-size: 1.6em; z-index: 4; }
+        /* 上書き防止: 状態アイコンがある場合は王冠の位置を調整 */
+        .node.leader.malicious::before, .node.leader.dead::before { top: -50px; font-size: 1.4em; }
+
+        .node.committed { background-color: #dcfce7; border-color: #10b981; }
+
+        /* Messages */
+        .msg-dot {
+            width: 14px; height: 14px; border-radius: 50%; position: absolute; z-index: 10;
+        }
+        .msg-proposal { background: var(--msg-proposal); }
+        .msg-vote { background: var(--msg-vote); }
+        .msg-timeout { background: var(--msg-timeout); }
+        .msg-fake { background: var(--msg-fake); border: 2px solid #fff; }
+
+        /* Controls */
+        .controls { display: flex; gap: 15px; margin-top: 10px; }
+        button {
+            padding: 12px 24px; font-size: 1em; border: none; border-radius: 8px;
+            cursor: pointer; font-weight: bold; color: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.1s;
+        }
+        button:active { transform: scale(0.96); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        #btn-next { background: #3b82f6; }
+        #btn-auto { background: #6366f1; min-width: 140px; }
+        #btn-auto.stop { background: #475569; }
+        #btn-reset { background: #e2e8f0; color: #475569; }
+
+        .hint { margin-top: 10px; font-size: 0.85em; color: #64748b; }
+    </style>
+</head>
+<body>
+
+    <h1>HotStuff Unified Simulator</h1>
+
+    <div class="status-panel normal" id="status-panel">
+        <div id="view-badge" class="view-badge">View: 1</div>
+        <div id="phase-title" class="phase-title">Ready</div>
+        <div id="phase-desc" class="description">
+            ノードをクリックして状態を変えてみましょう。<br>
+            (⚪正常 &rarr; 😈悪意 &rarr; 💀故障)<br>
+            その状態で「次へ」を押すと、役割に応じた行動をとります。
+        </div>
+    </div>
+
+    <div class="network-container" id="network"></div>
+
+    <div class="controls">
+        <button id="btn-reset" onclick="resetSim()">↺ リセット</button>
+        <button id="btn-next" onclick="manualNext()">次へ ▶</button>
+        <button id="btn-auto" onclick="toggleAuto()">▶ 自動再生</button>
+    </div>
+    <div class="hint">ヒント: 悪意ノード(😈)がリーダーになると偽提案、フォロワーだと偽投票をします。</div>
+
+    <script>
+        // --- 設定 ---
+        const NODE_COUNT = 4;
+        const QUORUM = 3; // 2/3 of 4 is 3 (3f+1 where f=1)
+        
+        // ノードの状態データ: { id: 0, state: 'NORMAL' | 'MALICIOUS' | 'DEAD' }
+        const nodesData = []; 
+        let currentView = 1;
+        let currentLeaderIdx = 0;
+
+        // フェーズ管理
+        let flowType = 'NORMAL'; // 'NORMAL', 'TIMEOUT', 'MALICIOUS_LEADER'
+        let phaseIndex = 0;
+        let subPhaseIndex = 0;
+        
+        let isAnimating = false;
+        let isAuto = false;
+        let autoTimer = null;
+
+        // 定義: フェーズリスト
+        const PHASES_NORMAL = [
+            { id: 'NEW_VIEW', t: 'New View', d: '新しいView開始。リーダーが選出されました。' },
+            { id: 'PREPARE_SEND', t: 'Prepare (Proposal)', d: 'リーダーが提案を送ります。' },
+            { id: 'PREPARE_VOTE', t: 'Prepare (Vote)', d: 'フォロワーが投票します。(悪意ノードは嘘をつきます)' },
+            { id: 'PRE_COMMIT_SEND', t: 'Pre-Commit (QC)', d: 'リーダーがQCを送ります。' },
+            { id: 'PRE_COMMIT_VOTE', t: 'Pre-Commit (Vote)', d: 'フォロワーが投票します。' },
+            { id: 'COMMIT_SEND', t: 'Commit (QC)', d: 'リーダーがCommitQCを送ります。' },
+            { id: 'COMMIT_VOTE', t: 'Commit (Vote)', d: 'フォロワーが最終投票します。' },
+            { id: 'DECIDE', t: 'Decide', d: '合意形成完了！ブロック確定。' }
+        ];
+
+        const PHASES_TIMEOUT = [
+            { id: 'DETECT', t: '⛔ Timeout', d: 'リーダーが応答しません(故障/合意失敗)。' },
+            { id: 'SEND_TC', t: '📣 TC Request', d: '次のリーダーへ交代願いを送ります。' },
+            { id: 'NEW_VIEW', t: '🔄 View Change', d: '強制的に次のViewへ移行します。' }
+        ];
+
+        const PHASES_MAL_LEADER = [
+            { id: 'SEND_FAKE', t: '😈 Fake Proposal', d: '悪意あるリーダーが偽の提案を送りました。' },
+            { id: 'REJECT', t: '🛡️ Reject', d: 'フォロワーは検証に失敗し、拒絶します。' },
+            { id: 'SEND_TC', t: '📣 TC Request', d: '次のリーダーへ交代願いを送ります。' },
+            { id: 'NEW_VIEW', t: '🔄 View Change', d: '悪意あるリーダーをスキップして進みます。' }
+        ];
+
+        // --- 初期化 ---
+        function init() {
+            const container = document.getElementById('network');
+            container.innerHTML = '';
+            nodesData.length = 0;
+
+            const radius = 100;
+            const centerX = 250; 
+            const centerY = 150;
+
+            for (let i = 0; i < NODE_COUNT; i++) {
+                // 円形配置
+                const angle = (i * (360 / NODE_COUNT) - 90) * (Math.PI / 180);
+                const x = centerX + radius * Math.cos(angle) - 30;
+                const y = centerY + radius * Math.sin(angle) - 30;
+
+                // DOM作成
+                const el = document.createElement('div');
+                el.className = 'node';
+                el.innerText = i;
+                el.style.left = `${x}px`;
+                el.style.top = `${y}px`;
+                
+                // クリックイベント: 状態トグル
+                el.onclick = () => toggleNodeState(i);
+
+                container.appendChild(el);
+                nodesData.push({ id: i, state: 'NORMAL', element: el, x, y });
+            }
+            updateUI();
+        }
+
+        // --- 状態操作 ---
+        function toggleNodeState(idx) {
+            // アニメーション中は変更禁止（混乱防ぐため）
+            if(isAnimating && isAuto) return; 
+
+            const n = nodesData[idx];
+            // Normal -> Malicious -> Dead -> Normal
+            if (n.state === 'NORMAL') n.state = 'MALICIOUS';
+            else if (n.state === 'MALICIOUS') n.state = 'DEAD';
+            else n.state = 'NORMAL';
+
+            // 即座に見た目反映
+            updateNodeAppearance();
+            
+            // もし停止中なら、パネルの説明も更新してあげる（親切設計）
+            if(!isAnimating) determineNextFlow(); 
+        }
+
+        function updateNodeAppearance() {
+            nodesData.forEach((n, i) => {
+                n.element.className = 'node'; // reset
+                if(n.state === 'MALICIOUS') n.element.classList.add('malicious');
+                if(n.state === 'DEAD') n.element.classList.add('dead');
+                
+                // Leaderバッジ
+                if(i === currentLeaderIdx && n.state !== 'DEAD') {
+                    n.element.classList.add('leader');
+                }
+            });
+        }
+
+        // --- ロジックコア: 次のフローを決定 ---
+        function determineNextFlow() {
+            const leader = nodesData[currentLeaderIdx];
+            
+            // リーダーの状態によってフロー分岐
+            if (leader.state === 'DEAD') {
+                if (flowType !== 'TIMEOUT') { flowType = 'TIMEOUT'; subPhaseIndex = 0; }
+            } else if (leader.state === 'MALICIOUS') {
+                if (flowType !== 'MALICIOUS_LEADER') { flowType = 'MALICIOUS_LEADER'; subPhaseIndex = 0; }
+            } else {
+                // リーダー正常だが、もしTIMEOUT/MALモードから戻ってきた直後ならリセット
+                if (flowType !== 'NORMAL') { flowType = 'NORMAL'; phaseIndex = 0; }
+            }
+            updateUI();
+        }
+
+        function updateUI() {
+            updateNodeAppearance();
+            
+            const panel = document.getElementById('status-panel');
+            const pTitle = document.getElementById('phase-title');
+            const pDesc = document.getElementById('phase-desc');
+            const vBadge = document.getElementById('view-badge');
+
+            vBadge.innerText = `View: ${currentView}`;
+            panel.className = 'status-panel';
+
+            let currentP;
+            if (flowType === 'TIMEOUT') {
+                panel.classList.add('timeout');
+                currentP = PHASES_TIMEOUT[subPhaseIndex];
+                pTitle.style.color = '#ef4444';
+            } else if (flowType === 'MALICIOUS_LEADER') {
+                panel.classList.add('malicious');
+                currentP = PHASES_MAL_LEADER[subPhaseIndex];
+                pTitle.style.color = '#9333ea';
+            } else {
+                panel.classList.add('normal');
+                currentP = PHASES_NORMAL[phaseIndex];
+                pTitle.style.color = '#1e293b';
+            }
+
+            pTitle.innerText = currentP.t;
+            pDesc.innerText = currentP.d;
+
+            // 嘘つきフォロワーがいる場合の補足
+            if(flowType === 'NORMAL' && currentP.id.includes('VOTE')) {
+                const liars = nodesData.filter(n => n.id !== currentLeaderIdx && n.state === 'MALICIOUS').length;
+                if(liars > 0) {
+                    pDesc.innerHTML += `<br><span style="color:#9333ea;font-weight:bold;">(⚠️ 悪意あるフォロワーが${liars}人います)</span>`;
+                }
+            }
+        }
+
+        // --- ステップ実行 ---
+        function manualNext() {
+            if(isAuto) toggleAuto();
+            processStep();
+        }
+
+        function processStep() {
+            if(isAnimating) return;
+            isAnimating = true;
+            document.getElementById('btn-next').disabled = true;
+            
+            // ゴミ掃除
+            document.querySelectorAll('.msg-dot').forEach(d => d.remove());
+
+            // 実行直前にフロー再確認（ユーザーがクリックで状態変えたかもしれないので）
+            determineNextFlow();
+
+            if (flowType === 'TIMEOUT') stepTimeout();
+            else if (flowType === 'MALICIOUS_LEADER') stepMaliciousLeader();
+            else stepNormal();
+        }
+
+        // 1. 正常系 (リーダー正常)
+        function stepNormal() {
+            const p = PHASES_NORMAL[phaseIndex];
+            const leader = nodesData[currentLeaderIdx];
+            const followers = nodesData.filter(n => n.id !== currentLeaderIdx);
+            
+            // フォロワーが死んでるかどうかのフィルタリングはメッセージ送信時に行う
+
+            switch(p.id) {
+                case 'NEW_VIEW':
+                    setTimeout(finishStep, 500);
+                    break;
+                case 'PREPARE_SEND':
+                case 'PRE_COMMIT_SEND':
+                case 'COMMIT_SEND':
+                case 'DECIDE':
+                    // Leader -> Followers
+                    const targets = (p.id === 'DECIDE') ? nodesData : followers;
+                    // 死んでるノードには届くが反応しないだけ（ここでは送信アニメは出す）
+                    animateMsg(leader, targets, 'msg-proposal', () => {
+                        if(p.id === 'DECIDE') nodesData.forEach(n => {
+                            if(n.state !== 'DEAD') n.element.classList.add('committed');
+                        });
+                        finishStep();
+                    });
+                    break;
+                case 'PREPARE_VOTE':
+                case 'PRE_COMMIT_VOTE':
+                case 'COMMIT_VOTE':
+                    // Followers -> Leader
+                    let validVotes = 1; // リーダー自身の票
+                    let processed = 0;
+                    
+                    // 生きてるフォロワーのみ
+                    const activeFollowers = followers.filter(n => n.state !== 'DEAD');
+                    if(activeFollowers.length === 0) { checkVote(1); return; }
+
+                    activeFollowers.forEach(f => {
+                        // 悪意があれば Fake(紫), 正常なら Vote(緑)
+                        const isMal = (f.state === 'MALICIOUS');
+                        const css = isMal ? 'msg-fake' : 'msg-vote';
+                        
+                        animateMsg(f, [leader], css, () => {
+                            processed++;
+                            if(!isMal) validVotes++; // 正常票のみカウント
+                            
+                            if(processed === activeFollowers.length) {
+                                checkVote(validVotes);
+                            }
+                        });
+                    });
+                    break;
+            }
+        }
+
+        function checkVote(votes) {
+            const leaderEl = nodesData[currentLeaderIdx].element;
+            if(votes >= QUORUM) {
+                // 成功
+                leaderEl.style.transform = "scale(1.25)";
+                setTimeout(() => { leaderEl.style.transform = "scale(1.15)"; finishStep(); }, 300);
+            } else {
+                // 失敗 -> Timeoutへ
+                leaderEl.style.backgroundColor = "#fee2e2";
+                document.getElementById('phase-desc').innerHTML += `<br><strong style="color:red">失敗: 票不足 (${votes}/${QUORUM})</strong>`;
+                setTimeout(() => {
+                    flowType = 'TIMEOUT'; subPhaseIndex = 0; 
+                    isAnimating = false; processStep();
+                }, 1500);
+            }
+        }
+
+        // 2. タイムアウト系 (リーダー死亡 or 合意失敗)
+        function stepTimeout() {
+            const p = PHASES_TIMEOUT[subPhaseIndex];
+            const nextLeaderId = (currentView) % NODE_COUNT;
+            const nextLeader = nodesData[nextLeaderId];
+            const activeNodes = nodesData.filter(n => n.state !== 'DEAD');
+
+            if(p.id === 'DETECT') {
+                setTimeout(finishStep, 800);
+            } else if (p.id === 'SEND_TC') {
+                // 生きてる全員 -> 次のリーダー
+                let count = 0;
+                activeNodes.forEach(n => {
+                    if(n.id === nextLeaderId) { count++; if(count===activeNodes.length) finishStep(); return; }
+                    animateMsg(n, [nextLeader], 'msg-timeout', () => {
+                        count++; if(count===activeNodes.length) finishStep();
+                    });
+                });
+            } else if (p.id === 'NEW_VIEW') {
+                // 次のリーダーが強調
+                const el = nextLeader.element;
+                el.style.transform = "scale(1.25)";
+                setTimeout(() => { el.style.transform = ""; finishStep(); }, 500);
+            }
+        }
+
+        // 3. 悪意リーダー系
+        function stepMaliciousLeader() {
+            const p = PHASES_MAL_LEADER[subPhaseIndex];
+            const leader = nodesData[currentLeaderIdx];
+            const nextLeaderId = (currentView) % NODE_COUNT;
+            const nextLeader = nodesData[nextLeaderId];
+            const followers = nodesData.filter(n => n.id !== currentLeaderIdx && n.state !== 'DEAD');
+
+            if(p.id === 'SEND_FAKE') {
+                animateMsg(leader, followers, 'msg-fake', finishStep);
+            } else if (p.id === 'REJECT') {
+                setTimeout(finishStep, 800);
+            } else if (p.id === 'SEND_TC') {
+                // 拒絶したので次のリーダーへ
+                let count = 0;
+                followers.forEach(n => {
+                    if(n.id === nextLeaderId) { count++; if(count===followers.length) finishStep(); return; }
+                    animateMsg(n, [nextLeader], 'msg-timeout', () => {
+                        count++; if(count===followers.length) finishStep();
+                    });
+                });
+            } else if (p.id === 'NEW_VIEW') {
+                const el = nextLeader.element;
+                el.style.transform = "scale(1.25)";
+                setTimeout(() => { el.style.transform = ""; finishStep(); }, 500);
+            }
+        }
+
+        // --- 共通処理 ---
+        function animateMsg(fromNode, toNodes, cssClass, callback) {
+            const container = document.getElementById('network');
+            let completed = 0;
+            // 自分自身や空リストの場合
+            const targets = toNodes.filter(n => n.id !== fromNode.id);
+            if(targets.length === 0) { if(callback) callback(); return; }
+
+            targets.forEach(toNode => {
+                const dot = document.createElement('div');
+                dot.className = `msg-dot ${cssClass}`;
+                dot.style.left = (fromNode.x + 23) + 'px';
+                dot.style.top = (fromNode.y + 23) + 'px';
+                dot.style.transition = 'all 0.6s ease-in-out';
+                container.appendChild(dot);
+
+                setTimeout(() => {
+                    dot.style.left = (toNode.x + 23) + 'px';
+                    dot.style.top = (toNode.y + 23) + 'px';
+                }, 50);
+
+                dot.ontransitionend = () => {
+                    dot.remove();
+                    completed++;
+                    if(completed === targets.length && callback) callback();
+                };
+            });
+        }
+
+        function finishStep() {
+            isAnimating = false;
+            document.getElementById('btn-next').disabled = false;
+
+            // インデックス進行 & View更新ロジック
+            let shouldAdvanceView = false;
+
+            if (flowType === 'NORMAL') {
+                phaseIndex++;
+                if (phaseIndex >= PHASES_NORMAL.length) shouldAdvanceView = true;
+            } else if (flowType === 'TIMEOUT') {
+                subPhaseIndex++;
+                if (subPhaseIndex >= PHASES_TIMEOUT.length) shouldAdvanceView = true;
+            } else if (flowType === 'MALICIOUS_LEADER') {
+                subPhaseIndex++;
+                if (subPhaseIndex >= PHASES_MAL_LEADER.length) shouldAdvanceView = true;
+            }
+
+            if(shouldAdvanceView) {
+                currentView++;
+                currentLeaderIdx = (currentView - 1) % NODE_COUNT;
+                phaseIndex = 0;
+                subPhaseIndex = 0;
+                
+                // コミット状態クリア
+                nodesData.forEach(n => n.element.classList.remove('committed'));
+                
+                // 次のリーダーが死んでる/悪意かを判定してモード切替
+                determineNextFlow();
+            } else {
+                updateUI();
+            }
+
+            if(isAuto) {
+                clearTimeout(autoTimer);
+                autoTimer = setTimeout(processStep, 1000);
+            }
+        }
+
+        function toggleAuto() {
+            isAuto = !isAuto;
+            const btn = document.getElementById('btn-auto');
+            if(isAuto) {
+                btn.innerText = "■ 停止";
+                btn.classList.add('stop');
+                if(!isAnimating) processStep();
+            } else {
+                btn.innerText = "▶ 自動再生";
+                btn.classList.remove('stop');
+                clearTimeout(autoTimer);
+            }
+        }
+
+        function resetSim() {
+            isAuto = false; clearTimeout(autoTimer);
+            document.getElementById('btn-auto').innerText = "▶ 自動再生";
+            document.getElementById('btn-auto').classList.remove('stop');
+            document.getElementById('btn-next').disabled = false;
+            isAnimating = false;
+            
+            currentView = 1;
+            currentLeaderIdx = 0;
+            phaseIndex = 0; subPhaseIndex = 0;
+            flowType = 'NORMAL';
+            
+            document.querySelectorAll('.msg-dot').forEach(d => d.remove());
+            init();
+        }
+
+        init();
+    </script>
+</body>
+</html>
